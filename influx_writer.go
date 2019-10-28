@@ -70,6 +70,7 @@ func main() {
 
 	var rv = viper.New()
 	rv.SetConfigName("writer")
+	rv.AddConfigPath("$HOME/.config")
 	rv.AddConfigPath(".")
 	err := rv.ReadInConfig()
 	if err != nil {
