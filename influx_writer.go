@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/viper"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -111,7 +112,15 @@ func NewWriter(C *Config) (*Writer, error) {
 	}
 	w.influxUrl.Path = path.Join(w.influxUrl.Path, "write")
 	w.userAgent = "influx-writer"
-	w.httpClient = http.Client{}
+	w.httpClient = http.Client{
+		Timeout: time.Second * 1,
+		Transport: &http.Transport{
+			Dial: (&net.Dialer{
+				Timeout: 1 * time.Second,
+			}).Dial,
+			TLSHandshakeTimeout: 1 * time.Second,
+		},
+	}
 	w.C = C
 	return w, nil
 }
