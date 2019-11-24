@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"github.com/coreos/go-systemd/daemon"
 	_ "github.com/influxdata/influxdb1-client" // this is important because of the bug in go mod
 	influxdb "github.com/influxdata/influxdb1-client/v2"
 	nats "github.com/nats-io/nats.go"
@@ -217,12 +218,33 @@ func main() {
 		}
 	}
 
+	watchdogChan := make(chan bool, 1)
+	done := make(chan bool, 1)
+	go func() {
+		wdInterval, err := daemon.SdWatchdogEnabled(false)
+		if err == nil || wdInterval != 0 {
+			return
+		}
+		watchdogTicker := time.NewTicker(wdInterval / 3)
+		for {
+			select {
+			case <-watchdogTicker.C:
+				watchdogChan <- true
+			case <-done:
+				return
+			}
+		}
+	}()
+
 	var sub stan.Subscription
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	for {
 		select {
+		case <-watchdogChan:
+			daemon.SdNotify(false, daemon.SdNotifyWatchdog)
 		case <-configChan:
+			daemon.SdNotify(false, daemon.SdNotifyReloading)
 			if w != nil {
 				w.Close()
 			}
@@ -240,6 +262,7 @@ func main() {
 				subChan <- true
 				continue
 			}
+			daemon.SdNotify(false, daemon.SdNotifyReady)
 			errorChan <- false
 		case errorOccured = <-errorChan:
 			if !errorOccured {
@@ -248,9 +271,10 @@ func main() {
 			log.Print("Closing subscription due to error...")
 			sub.Close()
 
-			log.Print("Sleeping for 60 seconds...")
-			time.Sleep(60 * time.Second)
-			subChan <- true
+			log.Print("Resubbing after 10 seconds...")
+			time.AfterFunc(10*time.Second, func() {
+				subChan <- true
+			})
 		case sig := <-signalChan:
 			switch sig {
 			case syscall.SIGHUP:
@@ -258,9 +282,11 @@ func main() {
 			case syscall.SIGINT:
 				fallthrough
 			case syscall.SIGTERM:
+				done <- true
 				w.Close()
 				return
 			}
 		}
 	}
+	daemon.SdNotify(false, daemon.SdNotifyStopping)
 }
